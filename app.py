@@ -4,6 +4,7 @@ import io
 import json
 import os
 import re
+import shutil
 import zipfile
 from dataclasses import dataclass, asdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -41,16 +42,42 @@ def _safe_text(node: ET.Element | None) -> str:
     return node.text.strip() if node is not None and node.text else ""
 
 
+def _cbr_sidecar_path(path: Path) -> Path:
+    return path.with_name(path.name + ".ComicInfo.xml")
+
+
+def _parse_comicinfo_xml(xml_bytes: bytes) -> ET.Element | None:
+    try:
+        return ET.fromstring(xml_bytes)
+    except ET.ParseError:
+        return None
+
+
 def read_metadata(path: Path) -> ComicMetadata:
     md = ComicMetadata(path=str(path), ext=path.suffix)
-    if path.suffix.lower() != ".cbz":
+    suffix = path.suffix.lower()
+
+    root: ET.Element | None = None
+    if suffix == ".cbz":
+        try:
+            with zipfile.ZipFile(path, "r") as zf:
+                if "ComicInfo.xml" not in zf.namelist():
+                    return md
+                root = _parse_comicinfo_xml(zf.read("ComicInfo.xml"))
+        except (OSError, zipfile.BadZipFile):
+            return md
+    elif suffix == ".cbr":
+        sidecar = _cbr_sidecar_path(path)
+        if not sidecar.exists():
+            return md
+        try:
+            root = _parse_comicinfo_xml(sidecar.read_bytes())
+        except OSError:
+            return md
+    else:
         return md
-    try:
-        with zipfile.ZipFile(path, "r") as zf:
-            if "ComicInfo.xml" not in zf.namelist():
-                return md
-            root = ET.fromstring(zf.read("ComicInfo.xml"))
-    except (OSError, zipfile.BadZipFile, ET.ParseError):
+
+    if root is None:
         return md
 
     md.series = _safe_text(root.find("Series"))
@@ -84,16 +111,24 @@ def build_comicinfo_xml(md: ComicMetadata) -> bytes:
 
 
 def write_metadata(path: Path, md: ComicMetadata) -> None:
-    if path.suffix.lower() != ".cbz":
-        return
+    suffix = path.suffix.lower()
     payload = build_comicinfo_xml(md)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    with zipfile.ZipFile(path, "r") as src, zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_DEFLATED) as dst:
-        for info in src.infolist():
-            if info.filename != "ComicInfo.xml":
-                dst.writestr(info, src.read(info.filename))
-        dst.writestr("ComicInfo.xml", payload)
-    os.replace(tmp, path)
+
+    if suffix == ".cbz":
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        with zipfile.ZipFile(path, "r") as src, zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_DEFLATED) as dst:
+            for info in src.infolist():
+                if info.filename != "ComicInfo.xml":
+                    dst.writestr(info, src.read(info.filename))
+            dst.writestr("ComicInfo.xml", payload)
+        os.replace(tmp, path)
+        return
+
+    if suffix == ".cbr":
+        sidecar = _cbr_sidecar_path(path)
+        tmp = sidecar.with_suffix(sidecar.suffix + ".tmp")
+        tmp.write_bytes(payload)
+        shutil.move(tmp, sidecar)
 
 
 def sanitize_filename(name: str) -> str:
