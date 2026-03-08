@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Comic Metadata Editor</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main>
+      <h1>Comic Metadata Editor</h1>
+
+      <section class="card">
+        <h2>1) Scan Files</h2>
+        <div class="row">
+          <input id="scanPath" placeholder="/path/to/comics or single file" />
+          <button id="scanBtn">Scan</button>
+        </div>
+        <p class="hint">Supports .cbz/.cbr/.pdf/.epub. Metadata read/write supports `.cbz` ComicInfo.xml and `.cbr` sidecar `<file>.ComicInfo.xml`.</p>
+      </section>
+
+      <section class="card">
+        <h2>2) Edit Metadata</h2>
+        <button id="saveBtn">Save Metadata to Files</button>
+        <div class="tableWrap">
+          <table id="grid">
+            <thead>
+              <tr>
+                <th>Path</th><th>Series</th><th>Title</th><th>Issue</th><th>Volume</th><th>Writer</th><th>Publisher</th><th>Year</th><th>Summary</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>3) Hardlink Output Structure</h2>
+        <div class="row">
+          <label>Template</label>
+          <input id="template" value="{{ default_template }}" />
+        </div>
+        <div class="row">
+          <label>Output root</label>
+          <input id="outputRoot" placeholder="/path/to/output" />
+          <button id="hardlinkBtn">Build Hardlinks</button>
+        </div>
+        <p class="hint">Available fields: {Series}, {Title}, {IssueNumber}, {Volume}, {Writer}, {Publisher}, {Year}, {ext}</p>
+      </section>
+
+      <pre id="status"></pre>
+    </main>
+
+    <script>
+      const state = { items: [] };
+      const columns = ["path", "series", "title", "issue_number", "volume", "writer", "publisher", "year", "summary"];
+
+      function renderTable() {
+        const tbody = document.querySelector("#grid tbody");
+        tbody.innerHTML = "";
+        state.items.forEach((item, idx) => {
+          const tr = document.createElement("tr");
+          columns.forEach((col) => {
+            const td = document.createElement("td");
+            if (col === "path") {
+              td.textContent = item[col];
+            } else {
+              const input = document.createElement(col === "summary" ? "textarea" : "input");
+              input.value = item[col] || "";
+              input.addEventListener("input", () => (state.items[idx][col] = input.value));
+              td.appendChild(input);
+            }
+            tr.appendChild(td);
+          });
+          tbody.appendChild(tr);
+        });
+      }
+
+      async function post(url, data) {
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(data),
+        });
+        return res.json();
+      }
+
+      function setStatus(obj) {
+        document.getElementById("status").textContent = JSON.stringify(obj, null, 2);
+      }
+
+      document.getElementById("scanBtn").onclick = async () => {
+        const path = document.getElementById("scanPath").value;
+        const data = await post("/api/scan", { path });
+        if (data.error) return setStatus(data);
+        state.items = data.items;
+        renderTable();
+        setStatus({ scanned: state.items.length });
+      };
+
+      document.getElementById("saveBtn").onclick = async () => {
+        const data = await post("/api/save_metadata", { items: state.items });
+        setStatus(data);
+      };
+
+      document.getElementById("hardlinkBtn").onclick = async () => {
+        const template = document.getElementById("template").value;
+        const output_root = document.getElementById("outputRoot").value;
+        const data = await post("/api/build_hardlinks", { template, output_root, items: state.items });
+        setStatus(data);
+      };
+    </script>
+  </body>
+</html>
